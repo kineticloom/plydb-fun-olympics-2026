@@ -1,0 +1,658 @@
+# yaml-language-server: $schema=../.claude/skills/plydb/references/OSI/core-spec/osi-schema.json
+
+# Semantic context overlay for the Milano-Cortina 2026 Winter Olympics dataset.
+# Enriches auto-scanned field types with descriptions, synonyms, join relationships,
+# and useful metrics discovered during exploratory analysis.
+
+version: "1.0"
+
+semantic_model:
+  - name: milano_cortina_2026
+    description: >
+      Milano-Cortina 2026 Winter Olympic Games data. The Games ran February 7-22, 2026
+      across 15 venues in northern Italy. 2,916 athletes from 93 countries competed
+      across 16 disciplines. 29 countries won at least one medal.
+    ai_context:
+      instructions: >
+        This dataset covers the Milano-Cortina 2026 Winter Olympics, enriched with World Bank
+        GDP data. Key modelling notes:
+
+        1. COUNTING MEDAL EVENTS vs MEDAL RECIPIENTS: The `medallists` table has one row
+        per athlete per medal. For team sports (ice hockey, curling, relays), every squad
+        member gets their own row -- so a single gold event can produce 23-25 rows.
+        To count distinct gold EVENTS (not athletes), use:
+          COUNT(DISTINCT discipline || '|' || event_name)
+        or GROUP BY discipline, event_name.
+
+        2. MEDAL TABLE vs MEDALLISTS: `medals` is a pre-aggregated summary with one row
+        per country (gold/silver/bronze/total counts). Use it for country-level standings.
+        Use `medallists` when you need individual athlete detail or per-event breakdowns.
+
+        3. JOINING ATHLETES TO MEDALS: Join on country_code between medallists, athletes,
+        and medals tables for delegation-level analysis.
+
+        4. EVENTS COLUMN: In `athletes`, `coaches`, and `teams`, the `events` column stores
+        a JSON-like string array. It is not a native JSON column -- use LIKE or string
+        functions to filter (e.g. events LIKE '%Biathlon%').
+        IMPORTANT GOTCHA: events LIKE '%Speed Skating%' also matches 'Short Track Speed Skating'
+        athletes. To count only long-track Speed Skating athletes you must exclude short track:
+          events LIKE '%Speed Skating%' AND events NOT LIKE '%Short Track Speed Skating%'
+        The correct athlete counts are: Speed Skating = 163, Short Track Speed Skating = 112.
+        Using the unguarded LIKE gives 275, which is the combined total and is wrong for
+        per-discipline medal rate calculations.
+
+        5. medal_code values: 1 = Gold, 2 = Silver, 3 = Bronze (matches the `medal` text field).
+
+        6. FULLY QUALIFIED TABLE NAMES: All tables must be referenced as catalog.schema.table
+        (e.g. medallists.medallists.medallists, medals.medals.medals,
+        gdp.default.gdp, gdp_metadata_country.default.gdp_metadata_country).
+
+        7. GDP DATA — WIDE FORMAT: The `gdp` table has one row per country with year columns
+        named "1960" through "2025". To get GDP for a specific year, reference the year column
+        directly (e.g. SELECT "2024" FROM gdp.default.gdp). Column names with spaces ("Country Name",
+        "Country Code", "Indicator Name", "Indicator Code") require double-quote quoting in SQL.
+        The most recent complete year is 2023; 2024/2025 are largely null. column70 is an
+        empty trailing artifact from the CSV and should be ignored.
+
+        8. GDP METADATA — HEADER ROW AS DATA: Both gdp_metadata_country and gdp_metadata_indicator
+        ingest their CSV header row as the first data row. Columns are auto-named column0, column1,
+        etc. Always filter out the header: WHERE column0 != 'Country Code' (for metadata_country)
+        or WHERE column0 != 'INDICATOR_CODE' (for metadata_indicator).
+
+        10. LATITUDE DATA: country_lat_lon has centroid latitude/longitude per country using
+        ISO-2 codes (e.g. 'NO', 'US'). To join to medals or GDP, use a CASE statement mapping
+        IOC codes to ISO-2 (e.g. NOR→NO, GER→DE, SUI→CH). Joining lat/lon to GDP by country
+        name works for most countries but fails for South Korea ('Korea, Rep.' in GDP vs
+        'South Korea' in lat/lon) and Czech Republic ('Czechia' vs 'Czech Republic') — use the
+        IOC→ISO-2 CASE join path instead.
+
+        9. JOINING GDP TO OLYMPICS DATA: The gdp table's "Country Code" column holds ISO 3-letter
+        codes (e.g. 'NOR', 'NED') matching country_code in medals/medallists/athletes.
+        The gdp_metadata_country table's column0 holds the same codes and adds Region and
+        IncomeGroup. Use these to enrich medal analysis with economic context.
+
+    datasets:
+
+      - name: medals
+        source: medals.medals.medals
+        primary_key: [country_code]
+        description: >
+          Pre-aggregated medal tally with one row per country. Gold/silver/bronze counts
+          and two rank columns: `rank` (gold-first ordering) and `rank_total` (total medal
+          count ordering). Only 29 countries appear here -- only nations that won at least
+          one medal are included.
+        ai_context:
+          synonyms:
+            - "medal table"
+            - "medal tally"
+            - "medal standings"
+            - "country rankings"
+        fields:
+          - name: rank
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: rank
+            description: Country rank ordered by gold medals first (official Olympic ranking).
+          - name: rank_total
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: rank_total
+            description: Country rank ordered by total medal count (gold + silver + bronze).
+          - name: total
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: total
+            description: Total medals won (gold + silver + bronze).
+
+      - name: medallists
+        source: medallists.medallists.medallists
+        primary_key: [code, medal_code, event_name, discipline]
+        description: >
+          Individual medal recipients -- one row per athlete per medal awarded. For team
+          sports each squad member has their own row, so this table overcounts events.
+          To analyse results at the event level, always GROUP BY discipline + event_name.
+          Covers all 16 competition days, Feb 7-22 2026.
+        ai_context:
+          synonyms:
+            - "medal winners"
+            - "podium finishers"
+            - "medal results"
+            - "individual medals"
+        fields:
+          - name: code
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: code
+            description: Athlete identifier. Joins to athletes.athletes.athletes.code.
+          - name: medal_code
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: medal_code
+            description: Numeric medal rank. 1 = Gold, 2 = Silver, 3 = Bronze.
+          - name: medal
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: medal
+            description: Medal type as text. Values are 'GOLD', 'SILVER', 'BRONZE' (uppercase).
+            ai_context:
+              synonyms:
+                - "medal type"
+                - "award"
+          - name: discipline
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: discipline
+            description: >
+              Sport discipline. The 16 exact values are: Alpine Skiing, Biathlon,
+              Bobsleigh, Cross-Country Skiing, Curling, Figure Skating, Freestyle Skiing,
+              Ice Hockey, Luge, Nordic Combined, Short Track Speed Skating, Skeleton,
+              Ski Jumping, Ski Mountaineering, Snowboard, Speed Skating.
+              Note: Ski Mountaineering debuted at these Games.
+            ai_context:
+              synonyms:
+                - "sport"
+                - "event category"
+          - name: event_name
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: event_name
+            description: >
+              Specific event within a discipline (e.g. "Men's 10km Sprint", "Women's Downhill").
+              For team sports (ice hockey) this is typically just "Men" or "Women".
+            ai_context:
+              synonyms:
+                - "event"
+                - "race"
+                - "competition"
+          - name: date
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: date
+            description: Date the medal was awarded. Ranges from 2026-02-07 to 2026-02-22.
+            dimension:
+              is_time: true
+
+      - name: athletes
+        source: athletes.athletes.athletes
+        primary_key: [code]
+        description: >
+          All 2,916 athletes who competed at Milano-Cortina 2026, from 93 countries.
+          Gender split is approximately 53% male (1,553) and 47% female (1,363).
+          The `events` column is a JSON-like string; use LIKE to filter by discipline or event.
+        ai_context:
+          synonyms:
+            - "competitors"
+            - "participants"
+            - "olympians"
+        fields:
+          - name: code
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: code
+            description: Unique athlete identifier. Joins to medallists.medallists.medallists.code.
+          - name: flag_bearer
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: flag_bearer
+            description: >
+              Ceremony flag-bearer code: 0 = not a flag bearer, 1 = opening ceremony,
+              2 = closing ceremony, 3 = both ceremonies (typically small delegations).
+              To count total flag bearers for a country, use COUNT(*) WHERE flag_bearer > 0.
+              Most countries have 2 opening + 1-2 closing bearers; host Italy had 4 opening + 2 closing = 6.
+            ai_context:
+              synonyms:
+                - "flag carrier"
+                - "opening ceremony"
+          - name: events
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: events
+            description: >
+              JSON-like string array of objects with 'discipline' and 'event' keys listing
+              the events this athlete was entered in. Not a native JSON column -- use LIKE
+              or string functions to filter (e.g. events LIKE '%Biathlon%').
+
+      - name: coaches
+        source: coaches.coaches.coaches
+        description: >
+          Coaching staff registered at the Games. Includes function (role), nationality,
+          and the events they are associated with (JSON-like string, same pattern as athletes.events).
+        fields:
+          - name: function
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: function
+            description: Role of the coach (e.g. 'Coach', 'Assistant Coach', 'Head Coach').
+            ai_context:
+              synonyms:
+                - "role"
+                - "coaching role"
+          - name: nationality
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: nationality
+            description: Coach's nationality (may differ from country_code if coaching a foreign team).
+
+      - name: teams
+        source: teams.teams.teams
+        description: >
+          Team entries at the Games. Each row is a team (relay squad, hockey team, etc.)
+          rather than an individual. The events column is a JSON-like string like athletes.events.
+        fields:
+          - name: team_type
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: team_type
+            description: Classification of the team entry (e.g. relay team, national team, mixed team).
+
+      - name: schedules
+        source: schedules.schedules.schedules
+        description: >
+          Full competition schedule: every session across all venues and disciplines,
+          with start/end times, venue, location, and whether the session is a medal event.
+          The Cortina Sliding Centre had the most sessions (294), followed by the Milano
+          Ice Skating Arena (162). Up to 9 gold events were decided on the busiest days.
+        fields:
+          - name: event_medal
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: event_medal
+            description: Boolean-like flag indicating whether this session is a medal event.
+            ai_context:
+              synonyms:
+                - "is medal event"
+                - "medal final"
+          - name: status
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: status
+            description: Session status (e.g. 'Finished', 'Scheduled', 'Cancelled').
+          - name: phase
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: phase
+            description: Competition phase (e.g. 'Final', 'Qualification', 'Semi-Final', 'Heat').
+            ai_context:
+              synonyms:
+                - "round"
+                - "stage"
+          - name: event_type
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: event_type
+            description: Type of event session (e.g. 'IND' for individual, 'TEAM' for team events).
+          - name: day
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: day
+            description: Competition day label (e.g. 'Day 1'). Complements start_date for day-level grouping.
+            dimension:
+              is_time: true
+
+      - name: venues
+        source: venues.venues.venues
+        primary_key: [venue_code]
+        description: >
+          The 15 official competition venues spread across two regions: the Milano
+          metropolitan area (ice sports: speed skating, figure skating, short track,
+          ice hockey) and the Dolomites/alpine area around Cortina d'Ampezzo and Livigno
+          (snow sports). Milano San Siro Olympic Stadium and Verona Olympic Arena are
+          ceremony venues with no sport disciplines listed.
+        ai_context:
+          synonyms:
+            - "arenas"
+            - "competition sites"
+            - "locations"
+        fields:
+          - name: disciplines
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: disciplines
+            description: >
+              Discipline(s) hosted at this venue. Single-discipline venues store a plain string
+              (e.g. 'discipline-biathlon'); multi-discipline venues store a JSON array string
+              (e.g. '["discipline-bobsleigh","discipline-luge","discipline-skeleton"]').
+          - name: disciplines_code
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: disciplines_code
+            description: >
+              Short code(s) for the discipline(s) at this venue. Single-discipline venues store
+              a plain string (e.g. 'BTH'); multi-discipline venues store a JSON array string
+              (e.g. '["BOB","LUG","SKN"]'). Joins to schedules.discipline_code.
+
+      - name: gdp
+        source: gdp.default.gdp
+        primary_key: ["Country Code"]
+        description: >
+          World Bank GDP (current US$) data for 266 countries and aggregate regions, in wide format.
+          One row per country; year columns "1960" through "2025" (DOUBLE, current USD).
+          Single indicator throughout: NY.GDP.MKTP.CD. Many nulls, especially for early decades
+          and small territories. 2023 is the most recent year with broad coverage; 2024/2025 are
+          largely null. The column "column70" is an empty trailing CSV artifact and should be ignored.
+          Column names with spaces must be double-quoted in SQL.
+        ai_context:
+          synonyms:
+            - "gross domestic product"
+            - "GDP"
+            - "economic output"
+            - "national income"
+            - "country GDP"
+          instructions: >
+            To extract a single year: SELECT "Country Code", "Country Name", "2023"
+            FROM gdp.default.gdp WHERE "Country Code" IS NOT NULL.
+            To join to Olympics medal data, match "Country Code" to country_code in medals/medallists/athletes.
+            For time-series analysis across years, you must unpivot manually by unioning year-specific
+            SELECT statements, as plydb does not support UNPIVOT syntax.
+            Exclude aggregate/regional rows (e.g. 'AFE', 'AFW', 'WLD') if you want country-only data;
+            these have NULL Region in gdp_metadata_country.
+        fields:
+          - name: Country Code
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: '"Country Code"'
+            description: ISO 3-letter country code. Joins to medals.country_code, athletes.country_code, gdp_metadata_country.column0.
+          - name: Country Name
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: '"Country Name"'
+            description: Full country name as used by the World Bank.
+          - name: "2023"
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: '"2023"'
+            description: GDP in current USD for 2023. Most recent year with broad country coverage.
+          - name: "2022"
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: '"2022"'
+            description: GDP in current USD for 2022.
+          - name: column70
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: column70
+            description: Empty trailing column — artifact of the source CSV format. Ignore in all queries.
+
+      - name: gdp_metadata_country
+        source: gdp_metadata_country.default.gdp_metadata_country
+        primary_key: [column0]
+        description: >
+          World Bank country metadata: region, income group, and special notes per country code.
+          266 rows plus one header row (which is ingested as a data row and must be filtered out).
+          Columns are auto-named column0–column4 because the CSV header was not parsed as a header.
+          Header row has column0 = 'Country Code'; always filter: WHERE column0 != 'Country Code'.
+          Regional aggregates (e.g. AFE, AFW, WLD) have NULL Region and NULL IncomeGroup.
+        ai_context:
+          synonyms:
+            - "country metadata"
+            - "region classification"
+            - "income group"
+          instructions: >
+            Column mapping: column0=Country Code, column1=Region, column2=IncomeGroup,
+            column3=SpecialNotes, column4=TableName (display name), column5=empty.
+            Filter header row: WHERE column0 != 'Country Code'.
+            Joins to gdp."Country Code" and medals/athletes.country_code via column0.
+            Income group values include: 'High income', 'Upper middle income',
+            'Lower middle income', 'Low income'. NULL IncomeGroup means it is a regional aggregate.
+        fields:
+          - name: column0
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: column0
+            description: Country Code (ISO 3-letter). Primary key after filtering out the header row.
+          - name: column1
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: column1
+            description: World Bank region (e.g. 'Europe & Central Asia', 'Latin America & Caribbean'). NULL for aggregate regions.
+          - name: column2
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: column2
+            description: Income group classification. Values are 'High income', 'Upper middle income', 'Lower middle income', 'Low income'. NULL for aggregate regions.
+          - name: column4
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: column4
+            description: Display name of the country/territory (matches "Country Name" in the gdp table).
+
+      - name: gdp_metadata_indicator
+        source: gdp_metadata_indicator.default.gdp_metadata_indicator
+        primary_key: [column0]
+        description: >
+          Descriptor for the single GDP indicator (NY.GDP.MKTP.CD). Contains one data row plus
+          one header row ingested as data. Columns auto-named column0–column3.
+          Filter header: WHERE column0 != 'INDICATOR_CODE'.
+          Primarily useful for understanding the definition and source of the GDP figures.
+        fields:
+          - name: column0
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: column0
+            description: Indicator code (NY.GDP.MKTP.CD).
+          - name: column1
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: column1
+            description: Indicator name ('GDP (current US$)').
+          - name: column2
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: column2
+            description: Full definition and methodology note for the GDP indicator.
+          - name: column3
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: column3
+            description: Source organizations (World Bank staff estimates, OECD, National Statistical Offices).
+
+      - name: country_lat_lon
+        source: country_lat_lon.default.country_lat_lon
+        primary_key: [country_code]
+        description: >
+          Centroid latitude and longitude for 245 countries and territories. Uses ISO-2
+          (alpha-2) country codes. Also contains USA state-level lat/lon in separate columns
+          (usa_state_code, usa_state_latitude, usa_state_longitude, usa_state) which are
+          irrelevant for Olympics analysis and should be ignored.
+          Southern hemisphere countries have negative latitude values.
+        ai_context:
+          synonyms:
+            - "country coordinates"
+            - "country location"
+            - "latitude"
+            - "geographic position"
+          instructions: >
+            country_code is ISO-2 (e.g. 'NO'=Norway, 'US'=USA, 'DE'=Germany).
+            To join to medals or GDP (which use IOC or ISO-3 codes), use a CASE statement
+            mapping IOC→ISO-2: NOR→NO, USA→US, ITA→IT, GER→DE, JPN→JP, SUI→CH, FRA→FR,
+            CAN→CA, NED→NL, SWE→SE, AUT→AT, CHN→CN, KOR→KR, FIN→FI, AUS→AU, GBR→GB,
+            CZE→CZ, SLO→SI, POL→PL, ESP→ES, NZL→NZ, BUL→BG, LAT→LV, BRA→BR, DEN→DK,
+            KAZ→KZ, EST→EE, BEL→BE, GEO→GE.
+            For latitude banding: ≥55° = Nordic/Polar, 45–55° = Northern Temperate,
+            35–45° = Mediterranean/East Asia, <35° = Southern Hemisphere/Tropical.
+        fields:
+          - name: country_code
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: country_code
+            description: ISO-2 (alpha-2) country code. Requires CASE mapping to join to Olympic IOC codes or World Bank ISO-3 codes.
+          - name: latitude
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: latitude
+            description: Country centroid latitude in decimal degrees. Negative = southern hemisphere. Range in dataset approx -75° (Antarctica) to 72° (Norway/Greenland).
+          - name: longitude
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: longitude
+            description: Country centroid longitude in decimal degrees.
+          - name: country
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: country
+            description: >
+              Country display name. Mostly matches World Bank GDP "Country Name" but with
+              exceptions: 'South Korea' here vs 'Korea, Rep.' in GDP; 'Czech Republic' here
+              vs 'Czechia' in GDP. Do not rely on name join for these two countries.
+
+    relationships:
+      - name: medallists_to_athletes
+        from: medallists
+        to: athletes
+        from_columns: [code]
+        to_columns: [code]
+        ai_context:
+          instructions: >
+            Links each medal recipient row to their full athlete profile (gender, country,
+            events entered). Use this join to enrich medal results with athlete details.
+
+      - name: medallists_to_medals
+        from: medallists
+        to: medals
+        from_columns: [country_code]
+        to_columns: [country_code]
+        ai_context:
+          instructions: >
+            Links individual medal records to the country medal tally. Useful for combining
+            per-athlete detail with country-level rankings.
+
+      - name: athletes_to_medals
+        from: athletes
+        to: medals
+        from_columns: [country_code]
+        to_columns: [country_code]
+        ai_context:
+          instructions: >
+            Joins the athlete roster to the medal table by country, enabling
+            delegation-size vs medal-count efficiency analysis.
+
+      - name: gdp_to_medals
+        from: gdp
+        to: medals
+        from_columns: ["Country Code"]
+        to_columns: [country_code]
+        ai_context:
+          instructions: >
+            Joins GDP figures to the Olympic medal tally by ISO country code. Use a specific
+            year column from gdp (e.g. "2023") to compare economic size against medal counts.
+            Note: regional aggregates in gdp (NULL Region in gdp_metadata_country) have no
+            matching row in medals and will be excluded by an INNER JOIN.
+
+      - name: gdp_to_athletes
+        from: gdp
+        to: athletes
+        from_columns: ["Country Code"]
+        to_columns: [country_code]
+        ai_context:
+          instructions: >
+            Joins GDP figures to the athlete roster for delegation-size vs economic-output analysis.
+            One GDP row matches many athlete rows; aggregate athletes before or after joining.
+
+      - name: gdp_metadata_country_to_gdp
+        from: gdp_metadata_country
+        to: gdp
+        from_columns: [column0]
+        to_columns: ["Country Code"]
+        ai_context:
+          instructions: >
+            Enriches GDP rows with Region and IncomeGroup. Filter the header row from
+            gdp_metadata_country (WHERE column0 != 'Country Code') before joining.
+
+      - name: gdp_metadata_country_to_medals
+        from: gdp_metadata_country
+        to: medals
+        from_columns: [column0]
+        to_columns: [country_code]
+        ai_context:
+          instructions: >
+            Joins country region/income classification directly to the medal table, enabling
+            group-by-region or group-by-income-level medal analysis without going through gdp.
+            Filter header row: WHERE column0 != 'Country Code'.
+
+      - name: schedules_to_venues
+        from: schedules
+        to: venues
+        from_columns: [venue_code]
+        to_columns: [venue_code]
+        ai_context:
+          instructions: Links schedule sessions to venue metadata (disciplines hosted, URLs).
+
+    metrics:
+      - name: total_gold_events
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: "COUNT(DISTINCT medallists.discipline || '|' || medallists.event_name)"
+        description: >
+          Number of distinct gold medal events. Use this instead of COUNT(*) on medallists
+          WHERE medal='GOLD' to avoid overcounting team sport members.
+        ai_context:
+          synonyms:
+            - "number of gold events"
+            - "events decided"
+
+      - name: gold_medals_per_100_athletes
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: "medals.gold * 1.0 / COUNT(athletes.code) * 100"
+        description: >
+          Gold medals won per 100 athletes sent -- a measure of delegation efficiency.
+          Norway (22.5) and the Netherlands (25.6) are the standout nations by this metric.
+        ai_context:
+          synonyms:
+            - "gold efficiency"
+            - "golds per athlete"
+
+      - name: total_medal_rate
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: "(medals.gold + medals.silver + medals.bronze) * 1.0 / COUNT(athletes.code) * 100"
+        description: >
+          Percentage of a country's athletes who won any medal. The Netherlands and Norway
+          both achieved ~51% -- roughly 1 in 2 athletes medalled.
+        ai_context:
+          synonyms:
+            - "medal conversion rate"
+            - "medal rate"
+            - "medals per athlete"

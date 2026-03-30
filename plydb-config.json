@@ -1,0 +1,53 @@
+{
+  "databases": {
+    "venues": {
+      "type": "file",
+      "path": "data/milano-cortina-2026-olympic-winter-games/venues.csv"
+    },
+    "teams": {
+      "type": "file",
+      "path": "data/milano-cortina-2026-olympic-winter-games/teams.csv"
+    },
+    "athletes": {
+      "type": "file",
+      "path": "data/milano-cortina-2026-olympic-winter-games/athletes.csv"
+    },
+    "medallists": {
+      "type": "file",
+      "path": "data/milano-cortina-2026-olympic-winter-games/medallists.csv"
+    },
+    "coaches": {
+      "type": "file",
+      "path": "data/milano-cortina-2026-olympic-winter-games/coaches.csv"
+    },
+    "schedules": {
+      "type": "file",
+      "path": "data/milano-cortina-2026-olympic-winter-games/schedules.csv"
+    },
+    "medals": {
+      "type": "file",
+      "path": "data/milano-cortina-2026-olympic-winter-games/medals.csv"
+    },
+    "gdp": {
+      "type": "file",
+      "path": "data/API_NY.GDP.MKTP.CD_DS2_en_csv_v2_32/API_NY.GDP.MKTP.CD_DS2_en_csv_v2_32.csv"
+    },
+    "gdp_metadata_country": {
+      "type": "file",
+      "path": "data/API_NY.GDP.MKTP.CD_DS2_en_csv_v2_32/Metadata_Country_API_NY.GDP.MKTP.CD_DS2_en_csv_v2_32.csv"
+    },
+    "gdp_metadata_indicator": {
+      "type": "file",
+      "path": "data/API_NY.GDP.MKTP.CD_DS2_en_csv_v2_32/Metadata_Indicator_API_NY.GDP.MKTP.CD_DS2_en_csv_v2_32.csv"
+    },
+    "country_lat_lon": {
+      "type": "file",
+      "path": "data/world_country_and_usa_states_latitude_and_longitude_values.csv"
+    }
+  },
+  "semantic_context": {
+    "overlays": [
+      "overlay.yaml"
+    ]
+  }
+}
